@@ -28,6 +28,8 @@ func resolveTarget(_ url: URL) -> URL {
     return url
 }
 
+let imageExts: Set<String> = ["png", "jpg", "jpeg", "gif", "svg", "webp", "heic", "bmp", "ico", "tiff"]
+
 func indexMarkdown(for dir: URL) -> String {
     let fm = FileManager.default
     let items = (try? fm.contentsOfDirectory(
@@ -35,12 +37,12 @@ func indexMarkdown(for dir: URL) -> String {
     var dirs: [String] = [], files: [String] = []
     for item in items {
         if isDir(item) { dirs.append(item.lastPathComponent) }
-        else if markdownExts.contains(item.pathExtension.lowercased()) { files.append(item.lastPathComponent) }
+        else { files.append(item.lastPathComponent) }
     }
     dirs.sort { $0.lowercased() < $1.lowercased() }
     files.sort { $0.lowercased() < $1.lowercased() }
     var md = "# \(dir.lastPathComponent)/\n\n"
-    if dirs.isEmpty && files.isEmpty { return md + "_No markdown files here._\n" }
+    if dirs.isEmpty && files.isEmpty { return md + "_Empty folder._\n" }
     for d in dirs {
         let enc = d.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? d
         md += "- 🗂 [\(d)/](\(enc)/)\n"
@@ -52,30 +54,45 @@ func indexMarkdown(for dir: URL) -> String {
     return md
 }
 
-// Markdown-file tree for the sidebar (folders containing no markdown are pruned).
+// Full file tree for the sidebar.
 func treeNodes(_ dir: URL, depth: Int = 0, budget: inout Int) -> [[String: Any]] {
     guard depth < 4, budget > 0 else { return [] }
     let items = (try? FileManager.default.contentsOfDirectory(
         at: dir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])) ?? []
     var dirs: [URL] = [], files: [URL] = []
     for item in items {
-        if isDir(item) { dirs.append(item) }
-        else if markdownExts.contains(item.pathExtension.lowercased()) { files.append(item) }
+        if isDir(item) { dirs.append(item) } else { files.append(item) }
     }
     dirs.sort { $0.lastPathComponent.lowercased() < $1.lastPathComponent.lowercased() }
     files.sort { $0.lastPathComponent.lowercased() < $1.lastPathComponent.lowercased() }
     var nodes: [[String: Any]] = []
-    for d in dirs {
+    for d in dirs where budget > 0 {
+        budget -= 1
         let children = treeNodes(d, depth: depth + 1, budget: &budget)
-        if !children.isEmpty {
-            nodes.append(["name": d.lastPathComponent + "/", "path": d.path, "children": children])
-        }
+        nodes.append(["name": d.lastPathComponent + "/", "path": d.path, "children": children])
     }
     for f in files where budget > 0 {
         budget -= 1
         nodes.append(["name": f.lastPathComponent, "path": f.path])
     }
     return nodes
+}
+
+// Classic `hexdump -C` layout: offset, 16 bytes (split 8|8), ASCII gutter.
+func hexDump(_ bytes: [UInt8]) -> String {
+    var lines: [String] = []
+    lines.reserveCapacity(bytes.count / 16 + 1)
+    for start in stride(from: 0, to: bytes.count, by: 16) {
+        let chunk = Array(bytes[start..<min(start + 16, bytes.count)])
+        var hex = ""
+        for i in 0..<16 {
+            hex += i < chunk.count ? String(format: "%02x ", chunk[i]) : "   "
+            if i == 7 { hex += " " }
+        }
+        let ascii = chunk.map { (32...126).contains($0) ? String(UnicodeScalar($0)) : "." }.joined()
+        lines.append(String(format: "%08x  ", start) + hex + " |" + ascii + "|")
+    }
+    return lines.joined(separator: "\n")
 }
 
 var initialFile: URL? = nil
@@ -236,6 +253,23 @@ func pageHTML(baseHref: String) -> String {
         bar.appendChild(el);
       });
     }
+    function __code(title, lang, text) {
+      window.__lastMd = undefined;
+      var y = window.scrollY;
+      var el = document.getElementById('content');
+      el.innerHTML = '';
+      var h = document.createElement('h1');
+      h.textContent = title;
+      el.appendChild(h);
+      var pre = document.createElement('pre');
+      var code = document.createElement('code');
+      if (lang) code.className = 'language-' + lang;
+      code.textContent = text;
+      pre.appendChild(code);
+      el.appendChild(pre);
+      if (lang && text.length < 200000) { try { hljs.highlightElement(code); } catch (e) {} }
+      window.scrollTo(0, y);
+    }
     function __tree(nodes, active, show) {
       var side = document.getElementById('sidebar');
       if (!show || !nodes.length) {
@@ -287,6 +321,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     var pendingFragment: String?
     var pageCounter = 0
     var currentPageFile: URL?
+    var hexMode = false
 
     // Sidebar root stays anchored to where moremark was opened.
     let treeRoot: URL? = initialFile.map { isDir($0) ? $0 : $0.deletingLastPathComponent() }
@@ -383,8 +418,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                 return
             }
             let target = URL(fileURLWithPath: url.path).standardizedFileURL
-            if isDir(target) || (markdownExts.contains(target.pathExtension.lowercased())
-                && FileManager.default.fileExists(atPath: target.path)) {
+            if FileManager.default.fileExists(atPath: target.path) {
                 pendingFragment = url.fragment
                 navigate(to: resolveTarget(target))
                 decisionHandler(.cancel)
@@ -456,6 +490,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         pushTree()
     }
 
+    @objc func toggleHex() {
+        hexMode.toggle()
+        render()
+    }
+
     func userContentController(_ userContentController: WKUserContentController,
                                didReceive message: WKScriptMessage) {
         guard message.name == "tabs",
@@ -484,19 +523,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         return String(data: data, encoding: .utf8)! + "[0]"
     }
 
+    func showMarkdown(_ md: String) {
+        webView.evaluateJavaScript("__update(\(jsString(md)))", completionHandler: nil)
+    }
+
+    func showCode(_ title: String, lang: String, text: String) {
+        webView.evaluateJavaScript(
+            "__code(\(jsString(title)), \(jsString(lang)), \(jsString(text)))", completionHandler: nil)
+    }
+
+    func showHex(title: String, bytes: [UInt8], totalSize: Int) {
+        var dump = hexDump(bytes)
+        if totalSize > bytes.count {
+            dump += "\n… truncated — showing first \(bytes.count) of \(totalSize) bytes"
+        }
+        showCode(title + " · hex", lang: "", text: dump)
+    }
+
     @objc func render() {
         guard pageLoaded else { return }
-        let md: String
-        if let cur = currentFile {
-            if isDir(cur) {
-                md = indexMarkdown(for: cur)
-            } else if let contents = try? String(contentsOf: cur, encoding: .utf8) {
-                md = contents
-            } else { return }
-        } else {
-            md = stdinMD ?? ""
+        guard let cur = currentFile else {
+            let md = stdinMD ?? ""
+            if hexMode { showHex(title: "stdin", bytes: [UInt8](md.utf8), totalSize: md.utf8.count) }
+            else { showMarkdown(md) }
+            return
         }
-        webView.evaluateJavaScript("__update(\(jsString(md)))", completionHandler: nil)
+        if isDir(cur) {
+            showMarkdown(indexMarkdown(for: cur))
+            return
+        }
+        let name = cur.lastPathComponent
+        let ext = cur.pathExtension.lowercased()
+        if hexMode {
+            let fh = try? FileHandle(forReadingFrom: cur)
+            let data = fh?.readData(ofLength: 65536) ?? Data()
+            try? fh?.close()
+            let total = (try? FileManager.default.attributesOfItem(atPath: cur.path)[.size] as? Int) ?? data.count
+            showHex(title: name, bytes: [UInt8](data), totalSize: total ?? data.count)
+            return
+        }
+        if markdownExts.contains(ext), let contents = try? String(contentsOf: cur, encoding: .utf8) {
+            showMarkdown(contents)
+            return
+        }
+        if imageExts.contains(ext) {
+            let enc = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+            showMarkdown("# \(name)\n\n![](\(enc))")
+            return
+        }
+        // Plain text if it decodes cleanly; otherwise fall back to a hex dump.
+        let fh = try? FileHandle(forReadingFrom: cur)
+        let data = fh?.readData(ofLength: 1_000_000) ?? Data()
+        try? fh?.close()
+        let total = ((try? FileManager.default.attributesOfItem(atPath: cur.path)[.size] as? Int) ?? data.count) ?? data.count
+        if let text = String(data: data, encoding: .utf8), !text.contains("\0") {
+            var body = text
+            if total > data.count { body += "\n… truncated — showing first \(data.count) of \(total) bytes" }
+            showCode(name, lang: ext, text: body)
+        } else {
+            showHex(title: name, bytes: [UInt8](data.prefix(65536)), totalSize: total)
+        }
     }
 
     func scheduleRender() {
@@ -574,6 +660,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         case #selector(toggleFileTree):
             item.state = UserDefaults.standard.bool(forKey: "sidebar") ? .on : .off
             return treeRoot != nil
+        case #selector(toggleHex):
+            item.state = hexMode ? .on : .off
+            return currentFile.map { !isDir($0) } ?? (stdinMD != nil)
         case #selector(goBack): return !backStack.isEmpty
         case #selector(goForward): return !forwardStack.isEmpty
         default: break
@@ -615,6 +704,7 @@ editMenuItem.submenu = editMenu
 let viewMenuItem = NSMenuItem(); mainMenu.addItem(viewMenuItem)
 let viewMenu = NSMenu(title: "View")
 viewMenu.addItem(NSMenuItem(title: "Toggle File Tree", action: #selector(AppDelegate.toggleFileTree), keyEquivalent: "b"))
+viewMenu.addItem(NSMenuItem(title: "Hex Dump", action: #selector(AppDelegate.toggleHex), keyEquivalent: "H"))
 viewMenu.addItem(withTitle: "Reload", action: #selector(AppDelegate.render), keyEquivalent: "r")
 viewMenu.addItem(NSMenuItem.separator())
 viewMenu.addItem(NSMenuItem(title: "System Appearance", action: #selector(AppDelegate.appearanceSystem), keyEquivalent: ""))

@@ -21,7 +21,8 @@ The window detaches — your prompt comes right back, no `&` needed.
 - **Mermaid** — ```` ```mermaid ```` fences render as diagrams, theme-aware
 - **Browse a repo's docs** — relative `.md` and folder links open in-window; `Cmd+[` back, `Cmd+]` forward
 - **History tabs** — visit a second doc and a slim tab strip appears with your trail; click to jump, × to forget. One doc open = no tabs, no chrome. We are not Obsidian.
-- **File tree** — `Cmd+B` toggles a slim rail of the folder's markdown files. Off by default. Still not Obsidian.
+- **File tree** — `Cmd+B` toggles a slim rail of *all* the folder's files. Off by default. Still not Obsidian.
+- **Opens anything** — source files render syntax-highlighted, images render as images, and binaries get a classic `hexdump -C` view. `Cmd+Shift+H` forces hex on any file, for the old unix souls checking bytes. Try it on [samples/magic.bin](samples/magic.bin).
 - **Relative images** resolve against the file's directory; external links open in your browser
 - Everything vendored into a single self-contained binary — works offline, no runtime dependencies
 

@@ -1,0 +1,7 @@
+{
+  "name": "moremark",
+  "family": ["cat", "more", "less"],
+  "electron": false,
+  "obsidian": false,
+  "bytes_are_fun": true
+}

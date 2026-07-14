@@ -26,7 +26,8 @@ moremark docs/                 # browse a folder (README or generated index)
 ## Behavior notes
 
 - **Live reload**: the window tracks the file. After you edit the same file again, do NOT relaunch — the open window updates itself on save.
-- Relative `.md` links and images resolve from the file's directory; the user can browse linked docs in-window (Cmd+[ / Cmd+] history).
+- Relative links and images resolve from the file's directory; linked docs browse in-window (Cmd+[ / Cmd+] history).
+- Non-markdown files work too: source renders syntax-highlighted, images render, binaries hex-dump (Cmd+Shift+H forces hex).
 - Window closes with Cmd+W. The process detaches from the shell automatically — never append `&`.
 
 ## When to offer
