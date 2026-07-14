@@ -98,13 +98,76 @@ func hexDump(_ bytes: [UInt8]) -> String {
 var initialFile: URL? = nil
 var stdinMD: String? = nil
 
+let cliHelp = """
+moremark — more for markdown: the one that opens a window.
+
+usage:
+  moremark                   open the current folder (README.md if present)
+  moremark <file.md>         preview a markdown file (live-reloads on save)
+  moremark <folder>          browse a folder — README or a generated index
+  moremark <any file>        source renders highlighted; binaries hex-dump
+  ... | moremark             preview stdin
+
+in the window:
+  ⌘B      toggle file tree           ⌘[  back
+  ⌘⇧H     hex dump (any file)        ⌘]  forward
+  ⌘R      reload                     ⌘W  close
+  ⌘?      this help                  ⌘Q  quit
+
+Relative links and folders open in-window; visit a second doc and history
+tabs appear. External links open in your browser. Your prompt returns
+immediately — the window detaches from the shell.
+
+docs: https://github.com/jasonmimick/moremark
+"""
+
+let helpMarkdown = """
+# moremark help
+
+`more` for markdown — the one that opens a window.
+
+## Command line
+
+| command | does |
+|---|---|
+| `moremark` | open the current folder — `README.md` if present, else an index |
+| `moremark file.md` | preview a markdown file, live-reloading on save |
+| `moremark folder/` | browse a folder |
+| `moremark any.file` | source renders syntax-highlighted; binaries hex-dump |
+| `... \\| moremark` | preview stdin (piped input is auto-detected) |
+
+Your prompt returns immediately — the window detaches from the shell.
+
+## Keyboard
+
+| keys | action |
+|---|---|
+| `⌘B` | toggle the file tree |
+| `⌘⇧H` | hex dump the current file (any file — old unix souls welcome) |
+| `⌘[` / `⌘]` | back / forward (also the ‹ › titlebar buttons) |
+| `⌘R` | re-render |
+| `⌘W` | close window · `⌘Q` quit |
+| `⌘?` | this page |
+
+## Behavior
+
+- **Live reload** — the window tracks the open file; edits re-render on save, keeping your scroll position. Never relaunch for the same file.
+- **Links** — relative markdown/folder links open in-window; anchors scroll; external links open in your browser. Images resolve from the file's folder.
+- **History tabs** — appear once you've visited two docs. Click to jump, `×` to forget.
+- **Appearance** — follows system light/dark; override in **View** menu.
+- Re-run the welcome card anytime: **moremark ▸ Welcome to moremark**.
+
+MIT · [github.com/jasonmimick/moremark](https://github.com/jasonmimick/moremark)
+"""
+
 var cliArgs = CommandLine.arguments
 if cliArgs.count == 1 {
     // Bare `moremark`: piped input becomes stdin mode, a terminal means "here".
     cliArgs.append(isatty(0) == 0 ? "-" : ".")
 }
-guard cliArgs.count >= 2, !["-h", "--help"].contains(cliArgs[1]) else {
-    die("usage: moremark [file.md | folder]   or   ... | moremark", code: 64)
+if ["-h", "--help"].contains(cliArgs[1]) {
+    print(cliHelp)
+    exit(0)
 }
 if cliArgs[1] == "--stdin-file", cliArgs.count == 3 {
     stdinMD = (try? String(contentsOfFile: cliArgs[2], encoding: .utf8)) ?? ""
@@ -263,7 +326,8 @@ func pageHTML(baseHref: String) -> String {
         <div><kbd>⌘[</kbd> <kbd>⌘]</kbd> back / forward</div>
         <div><kbd>⌘W</kbd> back to work</div>
       </div>
-      <p class="wlive">edits live-reload — leave the window open while you write ✏️</p>
+      <p class="wlive">edits live-reload — leave the window open while you write ✏️<br>
+      full reference: <b>Help ▸ moremark Help</b> <kbd>⌘?</kbd> · replay this card: <b>moremark ▸ Welcome</b></p>
       <button id="wgo">Let's go</button>
       <div class="wcat">🐈‍⬛</div>
     </div></div>
@@ -512,6 +576,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
 
     @objc func showWelcome() {
         webView.evaluateJavaScript("__welcome(true)", completionHandler: nil)
+    }
+
+    @objc func showHelp() {
+        let helpFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("moremark Help.md")
+        try? helpMarkdown.write(to: helpFile, atomically: true, encoding: .utf8)
+        if helpFile.standardizedFileURL != currentFile {
+            jump(to: helpFile.standardizedFileURL, push: true)
+        }
     }
 
     func scrollTo(fragment: String) {
@@ -839,6 +912,12 @@ let goMenu = NSMenu(title: "Go")
 goMenu.addItem(NSMenuItem(title: "Back", action: #selector(AppDelegate.goBack), keyEquivalent: "["))
 goMenu.addItem(NSMenuItem(title: "Forward", action: #selector(AppDelegate.goForward), keyEquivalent: "]"))
 goMenuItem.submenu = goMenu
+
+let helpMenuItem = NSMenuItem(); mainMenu.addItem(helpMenuItem)
+let helpMenu = NSMenu(title: "Help")
+helpMenu.addItem(NSMenuItem(title: "moremark Help", action: #selector(AppDelegate.showHelp), keyEquivalent: "?"))
+helpMenuItem.submenu = helpMenu
+app.helpMenu = helpMenu
 
 app.mainMenu = mainMenu
 let delegate = AppDelegate()
