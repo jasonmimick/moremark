@@ -37,6 +37,14 @@ Or from a clone:
 ./build.sh   # installs moremark.app to ~/Applications + wrapper to ~/.local/bin
 ```
 
+## Using an AI coding agent?
+
+moremark ships as a skill for the major agent CLIs — your agent learns to offer rendered previews of the markdown it writes:
+
+- **Claude Code**: `/plugin marketplace add jasonmimick/moremark` then `/plugin install moremark@moremark`
+- **Codex CLI** (and other `.agents/skills` agents): the skill is bundled in this repo at `.agents/skills/moremark/`
+- **Kiro**: add this repo as a Power (`POWER.md` included)
+
 ## Why
 
 Every markdown previewer is either $14, an Electron app, a terminal approximation, or trapped inside an editor. This is the missing member of the `cat`/`more`/`less` family: type a command, see the document, hit `Cmd+W`, back to work.

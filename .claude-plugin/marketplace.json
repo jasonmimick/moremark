@@ -1,0 +1,12 @@
+{
+  "name": "moremark",
+  "description": "moremark — preview markdown in a native macOS window from the CLI.",
+  "owner": { "name": "Jason Mimick", "url": "https://github.com/jasonmimick" },
+  "plugins": [
+    {
+      "name": "moremark",
+      "source": "./",
+      "description": "Preview markdown in a native macOS window from the CLI — GitHub rendering, live reload, mermaid diagrams."
+    }
+  ]
+}

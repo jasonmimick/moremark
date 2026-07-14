@@ -1,0 +1,10 @@
+{
+  "name": "moremark",
+  "version": "0.1.0",
+  "description": "Preview markdown in a native macOS window from the CLI — GitHub rendering, live reload, mermaid diagrams.",
+  "author": { "name": "Jason Mimick", "url": "https://github.com/jasonmimick" },
+  "homepage": "https://github.com/jasonmimick/moremark",
+  "repository": "https://github.com/jasonmimick/moremark",
+  "license": "MIT",
+  "keywords": ["markdown", "preview", "macos", "mermaid", "viewer"]
+}
