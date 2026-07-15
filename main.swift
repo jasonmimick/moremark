@@ -115,6 +115,7 @@ usage:
   markmore <folder>          browse a folder — README or a generated index
   markmore <any file>        source renders highlighted; binaries hex-dump
   ... | markmore             preview stdin
+  markmore -t <file.md>      render INTO the terminal (kitty/ghostty/WezTerm/iTerm2)
 
 in the window:
   ⌘B      file tree                  ⌘[ / ⌘]   back / forward
@@ -164,6 +165,10 @@ Your prompt returns immediately — the window detaches from the shell.
 | `⌘⇧R` / `⌥⌘C` / `⌘E` | reveal in Finder / copy path / open in editor |
 | `⌘R` | re-render · `⌘W` close · `⌘Q` quit · `⌘?` this page |
 
+## Terminal mode
+
+`markmore -t file.md` renders the document *into* the terminal itself — same typesetting, math and diagrams included — via the kitty graphics protocol (ghostty and WezTerm speak it too) or iTerm2's inline images. External links print as a numbered list under the render.
+
 ## Math
 
 `$e^{i\\pi}+1=0$` and `$$…$$` blocks typeset with KaTeX — fully offline, fonts embedded. YAML front matter renders as a tidy collapsible block instead of raw dashes.
@@ -180,6 +185,8 @@ MIT · [github.com/jasonmimick/markmore](https://github.com/jasonmimick/markmore
 """
 
 var cliArgs = CommandLine.arguments
+let termMode = cliArgs.contains("-t") || cliArgs.contains("--term")
+cliArgs.removeAll { $0 == "-t" || $0 == "--term" }
 if cliArgs.count == 1 {
     // Bare `markmore`: piped input becomes stdin mode, a terminal means "here".
     cliArgs.append(isatty(0) == 0 ? "-" : ".")
@@ -204,9 +211,28 @@ if cliArgs[1] == "--stdin-file", cliArgs.count == 3 {
     die("usage: markmore [file.md | folder]   or   ... | markmore", code: 64)
 }
 
+// Which terminal graphics protocol can we speak? (kitty covers ghostty/WezTerm too.)
+let termProtocol: String? = {
+    let env = ProcessInfo.processInfo.environment
+    if let forced = env["MARKMORE_TERM_PROTOCOL"] { return forced }
+    if env["KITTY_WINDOW_ID"] != nil { return "kitty" }
+    let term = env["TERM"] ?? ""
+    if term.contains("kitty") || term.contains("ghostty") { return "kitty" }
+    switch env["TERM_PROGRAM"] ?? "" {
+    case "WezTerm", "ghostty": return "kitty"
+    case "iTerm.app": return "iterm"
+    default: return nil
+    }
+}()
+
+if termMode && termProtocol == nil {
+    die("markmore -t needs a graphics-capable terminal (kitty, ghostty, WezTerm, iTerm2)", code: 69)
+}
+
 // Detach from the shell: after validating args, re-exec ourselves in the
 // background and return the user to their prompt immediately.
-if ProcessInfo.processInfo.environment["MARKMORE_FOREGROUND"] == nil {
+// Terminal mode stays in the foreground — it writes to this tty.
+if !termMode, ProcessInfo.processInfo.environment["MARKMORE_FOREGROUND"] == nil {
     let exe = Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])
     let child = Process()
     child.executableURL = exe
@@ -1315,7 +1341,156 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 }
 
+// MARK: terminal mode
+
+func emitImage(_ png: Data) {
+    let b64 = png.base64EncodedString()
+    var out = Data()
+    if termProtocol == "iterm" {
+        out = "\u{1b}]1337;File=inline=1;size=\(png.count):\(b64)\u{07}\n".data(using: .utf8)!
+    } else {
+        var first = true
+        var idx = b64.startIndex
+        while idx < b64.endIndex {
+            let end = b64.index(idx, offsetBy: 4096, limitedBy: b64.endIndex) ?? b64.endIndex
+            let more = end < b64.endIndex ? 1 : 0
+            let ctrl = first ? "f=100,a=T,m=\(more)" : "m=\(more)"
+            out.append("\u{1b}_G\(ctrl);\(String(b64[idx..<end]))\u{1b}\\".data(using: .utf8)!)
+            first = false
+            idx = end
+        }
+        out.append(contentsOf: [0x0a])
+    }
+    FileHandle.standardOutput.write(out)
+}
+
+// Renders the same page in an offscreen window, snapshots it, and prints the
+// PNG into the terminal. Output is normalized to 2x the CSS width so it's
+// retina-sharp regardless of which screen backs the offscreen window.
+final class TermDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
+    var window: NSWindow!
+    var webView: WKWebView!
+    var cssWidth: CGFloat = 760
+    var md = ""
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        let env = ProcessInfo.processInfo.environment
+        let fgbg = env["COLORFGBG"] ?? ""
+        let lightTerminal = fgbg.hasSuffix(";15") || fgbg.hasSuffix(";7")
+        NSApp.appearance = NSAppearance(named: lightTerminal ? .aqua : .darkAqua)
+
+        var wsz = winsize()
+        if ioctl(STDOUT_FILENO, TIOCGWINSZ, &wsz) == 0, wsz.ws_xpixel > 200 {
+            cssWidth = CGFloat(wsz.ws_xpixel) / 2 - 12
+        }
+        cssWidth = min(max(cssWidth, 400), 980)
+
+        if let s = stdinMD {
+            md = s
+        } else if let cur = initialFile {
+            if isDir(cur) {
+                md = indexMarkdown(for: cur)
+            } else if markdownExts.contains(cur.pathExtension.lowercased()),
+                      let s = try? String(contentsOf: cur, encoding: .utf8) {
+                md = s
+            } else {
+                die("markmore -t renders markdown and folders (open other files in the window mode)", code: 65)
+            }
+        }
+
+        // Offscreen position keeps it invisible; rendering is layer-based and
+        // unaffected. pageZoom=2 doubles the raster for crispness.
+        let frame = NSRect(x: -32000, y: -32000, width: cssWidth * 2, height: 1400)
+        window = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        webView = WKWebView(frame: NSRect(origin: .zero, size: frame.size))
+        webView.navigationDelegate = self
+        webView.pageZoom = 2.0
+        window.contentView = webView
+        window.orderFrontRegardless()
+
+        let baseDir = initialFile.map { isDir($0) ? $0 : $0.deletingLastPathComponent() }
+            ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let baseHref = URL(fileURLWithPath: baseDir.path, isDirectory: true).absoluteString
+        let pageFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("markmore-term-\(getpid()).html")
+        try? pageHTML(baseHref: baseHref).write(to: pageFile, atomically: true, encoding: .utf8)
+        webView.loadFileURL(pageFile, allowingReadAccessTo: URL(fileURLWithPath: "/"))
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
+            die("markmore -t: render timed out", code: 70)
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        let data = try! JSONSerialization.data(withJSONObject: [md])
+        let json = String(data: data, encoding: .utf8)!
+        webView.evaluateJavaScript("__update(\(json)[0])", completionHandler: nil)
+        // Let mermaid/KaTeX finish their async passes before measuring.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self.measureAndSnapshot() }
+    }
+
+    func measureAndSnapshot() {
+        webView.evaluateJavaScript("document.body.scrollHeight") { height, _ in
+            let cssHeight = min((height as? NSNumber).map { CGFloat(truncating: $0) } ?? 1200, 20000)
+            let size = NSSize(width: self.cssWidth * 2, height: cssHeight * 2 + 8)
+            self.window.setContentSize(size)
+            self.webView.frame = NSRect(origin: .zero, size: size)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { self.snapshot() }
+        }
+    }
+
+    func snapshot() {
+        let config = WKSnapshotConfiguration()
+        config.rect = webView.bounds
+        webView.takeSnapshot(with: config) { image, error in
+            guard let image, let png = self.normalizedPNG(image, targetWidth: Int(self.cssWidth * 2)) else {
+                die("markmore -t: snapshot failed: \(error?.localizedDescription ?? "unknown")", code: 70)
+            }
+            emitImage(png)
+            self.printLinks()
+        }
+    }
+
+    func normalizedPNG(_ image: NSImage, targetWidth: Int) -> Data? {
+        guard image.size.width > 0 else { return nil }
+        let targetHeight = Int(CGFloat(targetWidth) * image.size.height / image.size.width)
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: targetWidth, pixelsHigh: targetHeight,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        let ctx = NSGraphicsContext(bitmapImageRep: rep)!
+        ctx.imageInterpolation = .high
+        NSGraphicsContext.current = ctx
+        image.draw(in: NSRect(x: 0, y: 0, width: targetWidth, height: targetHeight),
+                   from: .zero, operation: .copy, fraction: 1.0)
+        NSGraphicsContext.restoreGraphicsState()
+        return rep.representation(using: .png, properties: [:])
+    }
+
+    func printLinks() {
+        let js = "Array.from(document.querySelectorAll('#content a[href^=\"http\"]')).slice(0, 20).map(function(a){return a.href})"
+        webView.evaluateJavaScript(js) { result, _ in
+            if let links = result as? [String], !links.isEmpty {
+                var out = "\n"
+                for (i, link) in links.enumerated() { out += "  [\(i + 1)] \(link)\n" }
+                FileHandle.standardOutput.write(out.data(using: .utf8)!)
+            }
+            exit(0)
+        }
+    }
+}
+
 let app = NSApplication.shared
+
+if termMode {
+    app.setActivationPolicy(.accessory)
+    let termDelegate = TermDelegate()
+    app.delegate = termDelegate
+    app.run()
+    exit(0)
+}
+
 app.setActivationPolicy(.regular)
 
 let mainMenu = NSMenu()

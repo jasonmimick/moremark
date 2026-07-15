@@ -11,6 +11,7 @@ markmore                  # right here — opens ./README.md, or a folder index
 markmore README.md        # native window, GitHub rendering, live reload
 markmore docs/            # browse a folder
 git log | markmore        # preview stdin
+markmore -t README.md     # render INTO the terminal (kitty, ghostty, WezTerm, iTerm2)
 ```
 
 The window detaches — your prompt comes right back, no `&` needed.
