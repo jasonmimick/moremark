@@ -256,6 +256,18 @@ func pageHTML(baseHref: String) -> String {
       .tab.active { background: #0d1117; color: #f0f6fc; border-color: #3d444d; border-bottom-color: #0d1117; }
     }
     body.tabs-on { padding-top: 32px; }
+    #findbar { display: none; position: fixed; top: 10px; right: 14px; z-index: 15;
+      align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px;
+      background: #ffffff; border: 1px solid #d1d9e0; box-shadow: 0 4px 18px rgba(0,0,0,0.15);
+      font: 12px -apple-system, BlinkMacSystemFont, sans-serif; }
+    body.tabs-on #findbar { top: 42px; }
+    #findbar input { border: 0; outline: none; background: transparent; color: inherit;
+      font: 13px -apple-system; width: 180px; }
+    #findcount { color: #59636e; min-width: 3em; text-align: right; }
+    @media (prefers-color-scheme: dark) {
+      #findbar { background: #161b22; border-color: #3d444d; color: #f0f6fc; }
+      #findcount { color: #9198a1; }
+    }
     #welcome { display: none; position: fixed; inset: 0; z-index: 20; align-items: center;
       justify-content: center; background: rgba(15, 23, 30, 0.35); backdrop-filter: blur(6px); }
     .wcard { position: relative; overflow: hidden; width: min(440px, 86vw); text-align: center;
@@ -309,6 +321,8 @@ func pageHTML(baseHref: String) -> String {
     <script>\#(resource(katexJSBase64))</script>
     <script>\#(resource(katexAutoJSBase64))</script>
     </head><body><nav id="tabbar"></nav>
+    <div id="findbar"><input id="findinput" placeholder="Find…" spellcheck="false">
+      <span id="findcount"></span></div>
     <article id="content" class="markdown-body"></article>
     <div id="welcome"><div class="wcard">
       <div class="wlogo">M↓</div>
@@ -409,6 +423,36 @@ func pageHTML(baseHref: String) -> String {
       if (lang && text.length < 200000) { try { hljs.highlightElement(code); } catch (e) {} }
       window.scrollTo(0, y);
     }
+    var findBar = document.getElementById('findbar');
+    var findInput = document.getElementById('findinput');
+    var findCount = document.getElementById('findcount');
+    function __find(show) {
+      findBar.style.display = show ? 'flex' : 'none';
+      if (show) { findInput.focus(); findInput.select(); }
+      else { findCount.textContent = ''; window.getSelection().removeAllRanges(); }
+    }
+    function countMatches(term) {
+      if (!term) return 0;
+      var text = document.getElementById('content').innerText.toLowerCase();
+      var t = term.toLowerCase(), n = 0, i = text.indexOf(t);
+      while (i !== -1 && n < 999) { n++; i = text.indexOf(t, i + t.length); }
+      return n;
+    }
+    findInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { __find(false); return; }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        var found = window.find(findInput.value, false, e.shiftKey, true, false, true, false);
+        findCount.textContent = countMatches(findInput.value) + (found ? '' : ' ✕');
+        findInput.focus();
+      }
+    });
+    findInput.addEventListener('input', function () {
+      window.getSelection().removeAllRanges();
+      var found = window.find(findInput.value, false, false, true, false, true, false);
+      findCount.textContent = findInput.value ? countMatches(findInput.value) + (found ? '' : ' ✕') : '';
+      findInput.focus();
+    });
     function __welcome(show) {
       document.getElementById('welcome').style.display = show ? 'flex' : 'none';
     }
@@ -644,6 +688,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Clear Menu", action: #selector(clearRecents), keyEquivalent: ""))
+    }
+
+    @objc func findInPage() {
+        webView.evaluateJavaScript("__find(true)", completionHandler: nil)
+    }
+
+    @objc func printDocument() {
+        let info = NSPrintInfo.shared
+        info.horizontalPagination = .fit
+        info.topMargin = 36; info.bottomMargin = 36
+        info.leftMargin = 36; info.rightMargin = 36
+        let op = webView.printOperation(with: info)
+        op.showsPrintPanel = true
+        op.showsProgressPanel = true
+        op.view?.frame = webView.bounds
+        op.runModal(for: window, delegate: nil, didRun: nil, contextInfo: nil)
     }
 
     @objc func showHelp() {
@@ -1119,6 +1179,8 @@ let recentsItem = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "
 recentsItem.submenu = recentsMenu
 fileMenu.addItem(recentsItem)
 fileMenu.addItem(.separator())
+fileMenu.addItem(NSMenuItem(title: "Print…", action: #selector(AppDelegate.printDocument), keyEquivalent: "p"))
+fileMenu.addItem(.separator())
 fileMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
 fileMenuItem.submenu = fileMenu
 
@@ -1126,6 +1188,8 @@ let editMenuItem = NSMenuItem(); mainMenu.addItem(editMenuItem)
 let editMenu = NSMenu(title: "Edit")
 editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
 editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+editMenu.addItem(.separator())
+editMenu.addItem(NSMenuItem(title: "Find…", action: #selector(AppDelegate.findInPage), keyEquivalent: "f"))
 editMenuItem.submenu = editMenu
 
 let viewMenuItem = NSMenuItem(); mainMenu.addItem(viewMenuItem)
