@@ -1046,8 +1046,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             ])
         }
         cell.textField?.stringValue = node.url.lastPathComponent
-        cell.textField?.font = node === rootNode
-            ? .boldSystemFont(ofSize: 13) : .systemFont(ofSize: 13)
+        cell.textField?.font = sidebarFont(bold: node === rootNode)
         let icon = NSWorkspace.shared.icon(forFile: node.url.path)
         icon.size = NSSize(width: 16, height: 16)
         cell.imageView?.image = icon
@@ -1237,6 +1236,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         applyTypography()
     }
 
+    // The sidebar follows the typography family at UI size (13pt).
+    func sidebarFont(bold: Bool) -> NSFont {
+        let preset = UserDefaults.standard.string(forKey: "typoPreset") ?? "system"
+        var font: NSFont
+        switch preset {
+        case "book":
+            let desc = NSFont.systemFont(ofSize: 13).fontDescriptor.withDesign(.serif)
+            font = desc.flatMap { NSFont(descriptor: $0, size: 13) } ?? .systemFont(ofSize: 13)
+        case "classic":
+            font = NSFont(name: "Iowan Old Style", size: 13) ?? .systemFont(ofSize: 13)
+        case "mono":
+            font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        case "custom":
+            if let fam = UserDefaults.standard.string(forKey: "fontFamily"),
+               let f = NSFont(name: fam, size: 13) { font = f } else { font = .systemFont(ofSize: 13) }
+        default:
+            font = .systemFont(ofSize: 13)
+        }
+        return bold ? NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask) : font
+    }
+
     @objc func presetSystem() { setPreset("system") }
     @objc func presetBook() { setPreset("book") }
     @objc func presetClassic() { setPreset("classic") }
@@ -1269,6 +1289,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             js += "document.documentElement.style.removeProperty('--mm-size');"
         }
         webView.evaluateJavaScript(js, completionHandler: nil)
+        if sidebarScroll?.isHidden == false { outlineView.reloadData() }
     }
 
     // MARK: about + appearance
