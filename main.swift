@@ -505,6 +505,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
         if let root = treeRoot { rootNode = FileNode(url: root) }
         sidebarScroll.isHidden = !(UserDefaults.standard.bool(forKey: "sidebar") && rootNode != nil)
+        if !sidebarScroll.isHidden, let root = rootNode { outlineView.expandItem(root) }
 
         window.contentView = splitView
         window.center()
@@ -720,6 +721,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         if show {
             rootNode?.invalidate()
             outlineView.reloadData()
+            if let root = rootNode { outlineView.expandItem(root) }
             sidebarScroll.isHidden = false
             if sidebarScroll.frame.width < 20 { splitView.setPosition(220, ofDividerAt: 0) }
             revealInTree()
@@ -743,14 +745,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         suppressSelection = false
     }
 
+    // The root folder is shown as a visible top-level node (expanded by default).
     func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
         if let node = item as? FileNode { return node.children.count }
-        return rootNode?.children.count ?? 0
+        return rootNode == nil ? 0 : 1
     }
 
     func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
         if let node = item as? FileNode { return node.children[index] }
-        return rootNode!.children[index]
+        return rootNode!
     }
 
     func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
@@ -788,6 +791,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             ])
         }
         cell.textField?.stringValue = node.url.lastPathComponent
+        cell.textField?.font = node === rootNode
+            ? .boldSystemFont(ofSize: 13) : .systemFont(ofSize: 13)
         let icon = NSWorkspace.shared.icon(forFile: node.url.path)
         icon.size = NSSize(width: 16, height: 16)
         cell.imageView?.image = icon
