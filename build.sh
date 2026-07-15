@@ -38,7 +38,7 @@ let katexAutoJSBase64 = "$(b64 katex-auto.min.js)"
 let katexCSSBase64 = "$(b64 katex-inline.css)"
 EOF
 
-swiftc -O -o markmore-bin main.swift Resources.swift
+swiftc -O -o markmore-bin main.swift Resources.swift terminal.swift
 
 if [ ! -f markmore.icns ]; then
   swift genicon.swift

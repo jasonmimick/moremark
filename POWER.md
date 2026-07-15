@@ -21,7 +21,8 @@ keywords: [markdown, preview, viewer, macos, mermaid, documentation]
 ## Usage
 
 ```sh
-markmore path/to/file.md       # detaches on its own — the prompt returns immediately
+markmore -w path/to/file.md    # ALWAYS -w from agents: native window for the user
+                               # (without -w it renders text into the terminal)
 some-command | markmore -      # preview stdin
 ```
 

@@ -18,11 +18,13 @@ The brew formula builds from source in seconds; no Gatekeeper prompts.
 ## Usage
 
 ```sh
-markmore                       # current dir: README.md or folder index
-markmore path/to/file.md       # detaches on its own — the shell prompt returns immediately
-some-command | markmore -      # preview stdin
-markmore docs/                 # browse a folder (README or generated index)
+markmore -w path/to/file.md    # ALWAYS use -w from agents: opens the native window
+                               # for the user and detaches (prompt returns immediately)
+markmore -w docs/              # browse a folder (README or generated index)
 ```
+
+Without `-w`, markmore renders ANSI text + graphics INTO the terminal — never do
+that from an agent shell; it floods the transcript. Always pass `-w`.
 
 ## Behavior notes
 

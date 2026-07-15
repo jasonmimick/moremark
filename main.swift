@@ -110,12 +110,13 @@ let cliHelp = """
 markmore — more for markdown: the one that opens a window.
 
 usage:
-  markmore                   open the current folder (README.md if present)
-  markmore <file.md>         preview a markdown file (live-reloads on save)
-  markmore <folder>          browse a folder — README or a generated index
-  markmore <any file>        source renders highlighted; binaries hex-dump
+  markmore [file.md|folder]  render RIGHT HERE in the terminal (default) —
+                             styled text; math, diagrams & images appear
+                             inline in kitty/ghostty/WezTerm/iTerm2
+  markmore -w <file|folder>  open the native window instead (live reload,
+                             file tree, tabs, hex view, any file type)
   ... | markmore             preview stdin
-  markmore -t <file.md>      render INTO the terminal (kitty/ghostty/WezTerm/iTerm2)
+  markmore --snap <file.md>  terminal render as one full-fidelity image
 
 in the window:
   ⌘B      file tree                  ⌘[ / ⌘]   back / forward
@@ -142,13 +143,13 @@ let helpMarkdown = """
 
 | command | does |
 |---|---|
-| `markmore` | open the current folder — `README.md` if present, else an index |
-| `markmore file.md` | preview a markdown file, live-reloading on save |
-| `markmore folder/` | browse a folder |
-| `markmore any.file` | source renders syntax-highlighted; binaries hex-dump |
+| `markmore file.md` | render right here in the terminal (default) — inline math/diagrams/images in kitty & friends |
+| `markmore` | current folder — `README.md` if present, else an index |
+| `markmore -w …` | open the native window: live reload, file tree, tabs, hex, any file type |
 | `... \\| markmore` | preview stdin (piped input is auto-detected) |
+| `markmore --snap …` | terminal render as one full-fidelity image |
 
-Your prompt returns immediately — the window detaches from the shell.
+With `-w` the window detaches — your prompt returns immediately.
 
 ## Keyboard
 
@@ -185,8 +186,10 @@ MIT · [github.com/jasonmimick/markmore](https://github.com/jasonmimick/markmore
 """
 
 var cliArgs = CommandLine.arguments
-let termMode = cliArgs.contains("-t") || cliArgs.contains("--term")
-cliArgs.removeAll { $0 == "-t" || $0 == "--term" }
+let windowMode = cliArgs.contains("-w") || cliArgs.contains("--window")
+let termSnap = cliArgs.contains("--snap")
+cliArgs.removeAll { ["-w", "--window", "-t", "--term", "--snap"].contains($0) }
+let termMode = !windowMode
 if cliArgs.count == 1 {
     // Bare `markmore`: piped input becomes stdin mode, a terminal means "here".
     cliArgs.append(isatty(0) == 0 ? "-" : ".")
@@ -225,8 +228,8 @@ let termProtocol: String? = {
     }
 }()
 
-if termMode && termProtocol == nil {
-    die("markmore -t needs a graphics-capable terminal (kitty, ghostty, WezTerm, iTerm2)", code: 69)
+if termSnap && termProtocol == nil {
+    die("markmore --snap needs a graphics-capable terminal (kitty, ghostty, WezTerm, iTerm2)", code: 69)
 }
 
 // Detach from the shell: after validating args, re-exec ourselves in the
@@ -1506,9 +1509,15 @@ let app = NSApplication.shared
 
 if termMode {
     app.setActivationPolicy(.accessory)
-    let termDelegate = TermDelegate()
-    app.delegate = termDelegate
-    app.run()
+    if termSnap {
+        let snapDelegate = TermDelegate()
+        app.delegate = snapDelegate
+        app.run()
+    } else {
+        let hybridDelegate = TermHybridDelegate()
+        app.delegate = hybridDelegate
+        app.run()
+    }
     exit(0)
 }
 

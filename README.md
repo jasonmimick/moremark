@@ -7,14 +7,16 @@
 `markmore README.md` opens a native macOS window with your markdown the way it's meant to look — GitHub styling, syntax-highlighted code, mermaid diagrams, live reload.
 
 ```sh
-markmore                  # right here — opens ./README.md, or a folder index
-markmore README.md        # native window, GitHub rendering, live reload
-markmore docs/            # browse a folder
+markmore README.md        # renders RIGHT HERE in your terminal (default)
+markmore                  # current folder — README or an index
+markmore -w README.md     # open the native window instead
 git log | markmore        # preview stdin
-markmore -t README.md     # render INTO the terminal (kitty, ghostty, WezTerm, iTerm2)
+markmore --snap file.md   # terminal render as one full-fidelity image
 ```
 
-The window detaches — your prompt comes right back, no `&` needed.
+**In the terminal** (the default): styled, wrapped, selectable text — and in kitty, ghostty, WezTerm, or iTerm2, block math, mermaid diagrams, and images appear *inline as real typeset graphics* on a transparent background. Links are clickable (OSC 8). In plain terminals you still get clean ANSI text.
+
+**In the window** (`-w`): live reload, file tree, history tabs, table of contents, find, zoom, typography presets, hex view, print-to-PDF. The window detaches — your prompt comes right back.
 
 ## Features
 
