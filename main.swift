@@ -54,28 +54,36 @@ func indexMarkdown(for dir: URL) -> String {
     return md
 }
 
-// Full file tree for the sidebar.
-func treeNodes(_ dir: URL, depth: Int = 0, budget: inout Int) -> [[String: Any]] {
-    guard depth < 4, budget > 0 else { return [] }
-    let items = (try? FileManager.default.contentsOfDirectory(
-        at: dir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])) ?? []
-    var dirs: [URL] = [], files: [URL] = []
-    for item in items {
-        if isDir(item) { dirs.append(item) } else { files.append(item) }
+// Lazy file-tree node for the NSOutlineView sidebar.
+final class FileNode {
+    let url: URL
+    let isDirectory: Bool
+    private var loaded = false
+    private var _children: [FileNode] = []
+
+    init(url: URL) {
+        self.url = url
+        self.isDirectory = isDir(url)
     }
-    dirs.sort { $0.lastPathComponent.lowercased() < $1.lastPathComponent.lowercased() }
-    files.sort { $0.lastPathComponent.lowercased() < $1.lastPathComponent.lowercased() }
-    var nodes: [[String: Any]] = []
-    for d in dirs where budget > 0 {
-        budget -= 1
-        let children = treeNodes(d, depth: depth + 1, budget: &budget)
-        nodes.append(["name": d.lastPathComponent + "/", "path": d.path, "children": children])
+
+    var children: [FileNode] {
+        if !loaded {
+            loaded = true
+            let items = (try? FileManager.default.contentsOfDirectory(
+                at: url, includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles])) ?? []
+            _children = items.map { FileNode(url: $0.standardizedFileURL) }.sorted {
+                if $0.isDirectory != $1.isDirectory { return $0.isDirectory }
+                return $0.url.lastPathComponent.lowercased() < $1.url.lastPathComponent.lowercased()
+            }
+        }
+        return _children
     }
-    for f in files where budget > 0 {
-        budget -= 1
-        nodes.append(["name": f.lastPathComponent, "path": f.path])
+
+    func invalidate() {
+        loaded = false
+        _children = []
     }
-    return nodes
 }
 
 // Classic `hexdump -C` layout: offset, 16 bytes (split 8|8), ASCII gutter.
@@ -242,33 +250,12 @@ func pageHTML(baseHref: String) -> String {
     .tab.active { background: #ffffff; color: #1f2328; border-color: #d1d9e0; border-bottom-color: #ffffff; }
     .tab .x { opacity: 0.45; cursor: pointer; padding: 0 2px; }
     .tab .x:hover { opacity: 1; }
-    #sidebar { display: none; position: fixed; top: 0; bottom: 0; left: 0;
-      width: var(--sbw, 220px); z-index: 8;
-      overflow-y: auto; overflow-x: auto; padding: 12px 8px; box-sizing: border-box;
-      background: #f6f8fa; border-right: 1px solid #d1d9e0;
-      font: 12px -apple-system, BlinkMacSystemFont, sans-serif; }
-    #sbdrag { display: none; position: fixed; top: 0; bottom: 0;
-      left: calc(var(--sbw, 220px) - 3px); width: 7px; cursor: col-resize; z-index: 10; }
-    #sbdrag:hover, #sbdrag.live { background: rgba(14, 124, 107, 0.35); }
-    body.tabs-on #sbdrag { top: 32px; }
-    .ti { padding: 3px 8px; border-radius: 6px; color: #59636e; cursor: default;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .ti:hover { background: rgba(0,0,0,0.05); }
-    .ti.active { background: #ddf4ff; color: #0969da; }
-    .ti.dir { font-weight: 600; }
-    .tc { padding-left: 12px; }
-    body.tabs-on #sidebar { top: 32px; }
     @media (prefers-color-scheme: dark) {
       #tabbar { background: #161b22; border-color: #3d444d; }
       .tab { color: #9198a1; }
       .tab.active { background: #0d1117; color: #f0f6fc; border-color: #3d444d; border-bottom-color: #0d1117; }
-      #sidebar { background: #161b22; border-color: #3d444d; }
-      .ti { color: #9198a1; }
-      .ti:hover { background: rgba(255,255,255,0.06); }
-      .ti.active { background: #121d2f; color: #4493f8; }
     }
     body.tabs-on { padding-top: 32px; }
-    body.side-on { padding-left: var(--sbw, 220px); }
     #welcome { display: none; position: fixed; inset: 0; z-index: 20; align-items: center;
       justify-content: center; background: rgba(15, 23, 30, 0.35); backdrop-filter: blur(6px); }
     .wcard { position: relative; overflow: hidden; width: min(440px, 86vw); text-align: center;
@@ -318,7 +305,7 @@ func pageHTML(baseHref: String) -> String {
     <script>\#(resource(markedJSBase64))</script>
     <script>\#(resource(hljsJSBase64))</script>
     <script>\#(resource(mermaidJSBase64))</script>
-    </head><body><nav id="tabbar"></nav><nav id="sidebar"></nav><div id="sbdrag"></div>
+    </head><body><nav id="tabbar"></nav>
     <article id="content" class="markdown-body"></article>
     <div id="welcome"><div class="wcard">
       <div class="wlogo">M↓</div>
@@ -407,58 +394,6 @@ func pageHTML(baseHref: String) -> String {
       if (lang && text.length < 200000) { try { hljs.highlightElement(code); } catch (e) {} }
       window.scrollTo(0, y);
     }
-    function __tree(nodes, active, show, width) {
-      var side = document.getElementById('sidebar');
-      var drag = document.getElementById('sbdrag');
-      if (width) document.documentElement.style.setProperty('--sbw', width + 'px');
-      if (!show || !nodes.length) {
-        side.style.display = 'none';
-        drag.style.display = 'none';
-        document.body.classList.remove('side-on');
-        return;
-      }
-      side.style.display = 'block';
-      drag.style.display = 'block';
-      document.body.classList.add('side-on');
-      side.innerHTML = '';
-      function build(list, container) {
-        list.forEach(function (n) {
-          var el = document.createElement('div');
-          el.className = 'ti' + (n.children ? ' dir' : '') + (n.path === active ? ' active' : '');
-          el.textContent = n.name;
-          el.title = n.name;
-          el.addEventListener('click', function () {
-            window.webkit.messageHandlers.tabs.postMessage({ action: 'go', path: n.path });
-          });
-          container.appendChild(el);
-          if (n.children) {
-            var kids = document.createElement('div');
-            kids.className = 'tc';
-            build(n.children, kids);
-            container.appendChild(kids);
-          }
-        });
-      }
-      build(nodes, side);
-    }
-    (function () {
-      var drag = document.getElementById('sbdrag');
-      var dragging = false;
-      drag.addEventListener('mousedown', function (e) {
-        dragging = true; drag.classList.add('live'); e.preventDefault();
-      });
-      window.addEventListener('mousemove', function (e) {
-        if (!dragging) return;
-        var w = Math.min(480, Math.max(140, e.clientX));
-        document.documentElement.style.setProperty('--sbw', w + 'px');
-      });
-      window.addEventListener('mouseup', function () {
-        if (!dragging) return;
-        dragging = false; drag.classList.remove('live');
-        var w = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sbw')) || 220;
-        window.webkit.messageHandlers.tabs.postMessage({ action: 'sbwidth', path: String(w) });
-      });
-    })();
     function __welcome(show) {
       document.getElementById('welcome').style.display = show ? 'flex' : 'none';
     }
@@ -496,6 +431,7 @@ final class PreviewWebView: WKWebView {
 let recentsMenu = NSMenu(title: "Open Recent")
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenuDelegate,
+                         NSOutlineViewDataSource, NSOutlineViewDelegate,
                          WKNavigationDelegate, WKScriptMessageHandler {
     var window: NSWindow!
     var webView: WKWebView!
@@ -512,6 +448,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var hexMode = false
     var backButton: NSButton!
     var forwardButton: NSButton!
+    var splitView: NSSplitView!
+    var sidebarScroll: NSScrollView!
+    var outlineView: NSOutlineView!
+    var rootNode: FileNode?
+    var suppressSelection = false
 
     // Sidebar root stays anchored to where markmore was opened.
     let treeRoot: URL? = initialFile.map { isDir($0) ? $0 : $0.deletingLastPathComponent() }
@@ -537,7 +478,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             contentRect: NSRect(x: 0, y: 0, width: 920, height: 780),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false)
-        window.contentView = webView
+        outlineView = NSOutlineView()
+        let column = NSTableColumn(identifier: .init("file"))
+        outlineView.addTableColumn(column)
+        outlineView.outlineTableColumn = column
+        outlineView.headerView = nil
+        outlineView.style = .sourceList
+        outlineView.dataSource = self
+        outlineView.delegate = self
+        outlineView.target = self
+        outlineView.doubleAction = #selector(outlineDoubleClicked)
+        sidebarScroll = NSScrollView()
+        sidebarScroll.documentView = outlineView
+        sidebarScroll.hasVerticalScroller = true
+        sidebarScroll.autohidesScrollers = true
+        sidebarScroll.widthAnchor.constraint(greaterThanOrEqualToConstant: 140).isActive = true
+        sidebarScroll.widthAnchor.constraint(lessThanOrEqualToConstant: 480).isActive = true
+
+        splitView = NSSplitView()
+        splitView.isVertical = true
+        splitView.dividerStyle = .thin
+        splitView.addArrangedSubview(sidebarScroll)
+        splitView.addArrangedSubview(webView)
+        splitView.setHoldingPriority(NSLayoutConstraint.Priority(261), forSubviewAt: 0)
+        splitView.autosaveName = "markmoreSplit"
+
+        if let root = treeRoot { rootNode = FileNode(url: root) }
+        sidebarScroll.isHidden = !(UserDefaults.standard.bool(forKey: "sidebar") && rootNode != nil)
+
+        window.contentView = splitView
         window.center()
         window.setFrameAutosaveName("markmore")
 
@@ -608,6 +577,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         backButton.isEnabled = !backStack.isEmpty
         forwardButton.isEnabled = !forwardStack.isEmpty
         watch()
+        revealInTree()
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -615,7 +585,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         applyTypography()
         render()
         pushTabs()
-        pushTree()
         if let frag = pendingFragment {
             pendingFragment = nil
             scrollTo(fragment: frag)
@@ -744,27 +713,102 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         webView.evaluateJavaScript("__tabs(\(json)[0], \(active))", completionHandler: nil)
     }
 
-    func pushTree() {
-        guard pageLoaded else { return }
-        let show = UserDefaults.standard.bool(forKey: "sidebar")
-        var nodes: [[String: Any]] = []
-        if show, let root = treeRoot {
-            var budget = 500
-            nodes = treeNodes(root, budget: &budget)
+    @objc func toggleFileTree() {
+        guard rootNode != nil else { return }
+        let show = sidebarScroll.isHidden
+        UserDefaults.standard.set(show, forKey: "sidebar")
+        if show {
+            rootNode?.invalidate()
+            outlineView.reloadData()
+            sidebarScroll.isHidden = false
+            if sidebarScroll.frame.width < 20 { splitView.setPosition(220, ofDividerAt: 0) }
+            revealInTree()
+        } else {
+            sidebarScroll.isHidden = true
         }
-        let active = currentFile?.path ?? ""
-        let sbw = UserDefaults.standard.double(forKey: "sbw")
-        guard let data = try? JSONSerialization.data(withJSONObject: [nodes]),
-              let json = String(data: data, encoding: .utf8) else { return }
-        webView.evaluateJavaScript(
-            "__tree(\(json)[0], \(jsString(active)), \(show), \(sbw >= 140 ? sbw : 220))",
-            completionHandler: nil)
     }
 
-    @objc func toggleFileTree() {
-        let show = !UserDefaults.standard.bool(forKey: "sidebar")
-        UserDefaults.standard.set(show, forKey: "sidebar")
-        pushTree()
+    func revealInTree() {
+        guard !sidebarScroll.isHidden, let cur = currentFile else { return }
+        suppressSelection = true
+        let row = (0..<outlineView.numberOfRows).first {
+            (outlineView.item(atRow: $0) as? FileNode)?.url == cur
+        }
+        if let row {
+            outlineView.selectRowIndexes([row], byExtendingSelection: false)
+            outlineView.scrollRowToVisible(row)
+        } else {
+            outlineView.deselectAll(nil)
+        }
+        suppressSelection = false
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
+        if let node = item as? FileNode { return node.children.count }
+        return rootNode?.children.count ?? 0
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
+        if let node = item as? FileNode { return node.children[index] }
+        return rootNode!.children[index]
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
+        (item as? FileNode)?.isDirectory ?? false
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?,
+                     item: Any) -> NSView? {
+        guard let node = item as? FileNode else { return nil }
+        let id = NSUserInterfaceItemIdentifier("fileCell")
+        let cell: NSTableCellView
+        if let reused = outlineView.makeView(withIdentifier: id, owner: nil) as? NSTableCellView {
+            cell = reused
+        } else {
+            cell = NSTableCellView()
+            cell.identifier = id
+            let icon = NSImageView()
+            let label = NSTextField(labelWithString: "")
+            label.font = .systemFont(ofSize: 13)
+            label.lineBreakMode = .byTruncatingTail
+            cell.addSubview(icon)
+            cell.addSubview(label)
+            cell.imageView = icon
+            cell.textField = label
+            icon.translatesAutoresizingMaskIntoConstraints = false
+            label.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
+                icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                icon.widthAnchor.constraint(equalToConstant: 16),
+                icon.heightAnchor.constraint(equalToConstant: 16),
+                label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 5),
+                label.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -2),
+                label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            ])
+        }
+        cell.textField?.stringValue = node.url.lastPathComponent
+        let icon = NSWorkspace.shared.icon(forFile: node.url.path)
+        icon.size = NSSize(width: 16, height: 16)
+        cell.imageView?.image = icon
+        return cell
+    }
+
+    func outlineViewSelectionDidChange(_ notification: Notification) {
+        guard !suppressSelection,
+              let node = outlineView.item(atRow: outlineView.selectedRow) as? FileNode,
+              !node.isDirectory, node.url != currentFile else { return }
+        jump(to: node.url, push: true)
+    }
+
+    @objc func outlineDoubleClicked() {
+        guard let node = outlineView.item(atRow: outlineView.clickedRow) as? FileNode,
+              node.isDirectory else { return }
+        if outlineView.isItemExpanded(node) {
+            outlineView.collapseItem(node)
+        } else {
+            outlineView.expandItem(node)
+        }
     }
 
     @objc func toggleHex() {
@@ -793,8 +837,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             }
         case "welcomed":
             UserDefaults.standard.set(true, forKey: "welcomed")
-        case "sbwidth":
-            if let w = Double(path), w >= 140 { UserDefaults.standard.set(w, forKey: "sbw") }
         default: break
         }
     }
@@ -1012,8 +1054,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         case #selector(appearanceLight): item.state = mode == "light" ? .on : .off
         case #selector(appearanceDark): item.state = mode == "dark" ? .on : .off
         case #selector(toggleFileTree):
-            item.state = UserDefaults.standard.bool(forKey: "sidebar") ? .on : .off
-            return treeRoot != nil
+            item.state = sidebarScroll?.isHidden == false ? .on : .off
+            return rootNode != nil
         case #selector(toggleHex):
             item.state = hexMode ? .on : .off
             return currentFile.map { !isDir($0) } ?? (stdinMD != nil)
