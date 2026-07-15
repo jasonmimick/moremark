@@ -512,6 +512,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var outlineView: NSOutlineView!
     var rootNode: FileNode?
     var suppressSelection = false
+    var treeWatcher: DispatchSourceFileSystemObject?
 
     // Sidebar root stays anchored to where markmore was opened.
     let treeRoot: URL? = initialFile.map { isDir($0) ? $0 : $0.deletingLastPathComponent() }
@@ -564,7 +565,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
         if let root = treeRoot { rootNode = FileNode(url: root) }
         sidebarScroll.isHidden = !(UserDefaults.standard.bool(forKey: "sidebar") && rootNode != nil)
-        if !sidebarScroll.isHidden, let root = rootNode { outlineView.expandItem(root) }
+        if !sidebarScroll.isHidden, let root = rootNode {
+            outlineView.expandItem(root)
+            watchTree()
+        }
 
         window.contentView = splitView
         window.center()
@@ -619,7 +623,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             if !visited.contains(cur) { visited.append(cur) }
             noteRecent(cur)
             window.title = cur.lastPathComponent + (isDir(cur) ? "/" : "")
-            window.subtitle = (currentBaseDir.path as NSString).abbreviatingWithTildeInPath
+            var subtitle = (currentBaseDir.path as NSString).abbreviatingWithTildeInPath
+            if markdownExts.contains(cur.pathExtension.lowercased()),
+               let text = try? String(contentsOf: cur, encoding: .utf8) {
+                let words = text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count
+                let minutes = max(1, words / 220)
+                subtitle += "  ·  \(words) words · \(minutes) min"
+            }
+            window.subtitle = subtitle
         } else {
             window.title = "stdin"
             window.subtitle = ""
@@ -688,6 +699,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Clear Menu", action: #selector(clearRecents), keyEquivalent: ""))
+    }
+
+    @objc func revealInFinder() {
+        guard let cur = currentFile else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([cur])
+    }
+
+    @objc func copyPath() {
+        guard let cur = currentFile else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(cur.path, forType: .string)
+    }
+
+    @objc func openInEditor() {
+        guard let cur = currentFile, !isDir(cur) else { return }
+        NSWorkspace.shared.open(cur)
     }
 
     @objc func findInPage() {
@@ -800,13 +827,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             sidebarScroll.isHidden = false
             if sidebarScroll.frame.width < 20 { splitView.setPosition(220, ofDividerAt: 0) }
             revealInTree()
+            watchTree()
         } else {
             sidebarScroll.isHidden = true
+            treeWatcher?.cancel()
+            treeWatcher = nil
         }
     }
 
+    // Expand ancestor folders so the current file is actually visible, then select it.
     func revealInTree() {
-        guard !sidebarScroll.isHidden, let cur = currentFile else { return }
+        guard !sidebarScroll.isHidden, let cur = currentFile, let root = rootNode else { return }
+        let rootPath = root.url.path
+        if cur.path.hasPrefix(rootPath + "/") || cur.path == rootPath {
+            var node = root
+            outlineView.expandItem(node)
+            let relative = cur.path.dropFirst(rootPath.count).split(separator: "/").dropLast()
+            for component in relative {
+                guard let child = node.children.first(where: {
+                    $0.url.lastPathComponent == String(component) }) else { break }
+                outlineView.expandItem(child)
+                node = child
+            }
+        }
         suppressSelection = true
         let row = (0..<outlineView.numberOfRows).first {
             (outlineView.item(atRow: $0) as? FileNode)?.url == cur
@@ -818,6 +861,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             outlineView.deselectAll(nil)
         }
         suppressSelection = false
+    }
+
+    // Refresh the tree when anything inside the root folder changes (kqueue on the
+    // root dir catches direct children; deeper changes are caught on next toggle).
+    func watchTree() {
+        treeWatcher?.cancel()
+        treeWatcher = nil
+        guard let root = rootNode, !sidebarScroll.isHidden else { return }
+        let fd = open(root.url.path, O_EVTONLY)
+        guard fd >= 0 else { return }
+        let src = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd, eventMask: [.write], queue: .main)
+        src.setEventHandler { [weak self] in
+            guard let self else { return }
+            NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(self.reloadTree), object: nil)
+            self.perform(#selector(self.reloadTree), with: nil, afterDelay: 0.3)
+        }
+        src.setCancelHandler { close(fd) }
+        src.resume()
+        treeWatcher = src
+    }
+
+    @objc func reloadTree() {
+        guard !sidebarScroll.isHidden else { return }
+        let expanded = (0..<outlineView.numberOfRows).compactMap { r -> URL? in
+            guard let n = outlineView.item(atRow: r) as? FileNode,
+                  outlineView.isItemExpanded(n) else { return nil }
+            return n.url
+        }
+        rootNode?.invalidate()
+        outlineView.reloadData()
+        if let root = rootNode { outlineView.expandItem(root) }
+        // Re-expand what the user had open (children re-resolve lazily).
+        for url in expanded {
+            let row = (0..<outlineView.numberOfRows).first {
+                (outlineView.item(atRow: $0) as? FileNode)?.url == url
+            }
+            if let row, let node = outlineView.item(atRow: row) as? FileNode {
+                outlineView.expandItem(node)
+            }
+        }
+        revealInTree()
     }
 
     // The root folder is shown as a visible top-level node (expanded by default).
@@ -1178,6 +1263,12 @@ let fileMenu = NSMenu(title: "File")
 let recentsItem = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "")
 recentsItem.submenu = recentsMenu
 fileMenu.addItem(recentsItem)
+fileMenu.addItem(.separator())
+fileMenu.addItem(NSMenuItem(title: "Reveal in Finder", action: #selector(AppDelegate.revealInFinder), keyEquivalent: "R"))
+let copyPathItem = NSMenuItem(title: "Copy Path", action: #selector(AppDelegate.copyPath), keyEquivalent: "c")
+copyPathItem.keyEquivalentModifierMask = [.command, .option]
+fileMenu.addItem(copyPathItem)
+fileMenu.addItem(NSMenuItem(title: "Open in Default Editor", action: #selector(AppDelegate.openInEditor), keyEquivalent: "e"))
 fileMenu.addItem(.separator())
 fileMenu.addItem(NSMenuItem(title: "Print…", action: #selector(AppDelegate.printDocument), keyEquivalent: "p"))
 fileMenu.addItem(.separator())
