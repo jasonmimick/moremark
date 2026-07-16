@@ -532,6 +532,10 @@ final class TermHybridDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
             }
+            if isatty(STDOUT_FILENO) != 0 {
+                let p = TermPalette(dark: dark)
+                out.write((p.dim + "── markmore -w opens the window" + p.reset + "\n").data(using: .utf8)!)
+            }
             exit(0)
         }
 

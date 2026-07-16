@@ -602,7 +602,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var outlineView: NSOutlineView!
     var rootNode: FileNode?
     var suppressSelection = false
-    var treeWatcher: DispatchSourceFileSystemObject?
+    var fsStream: FSEventStreamRef?
 
     // Sidebar root stays anchored to where markmore was opened.
     let treeRoot: URL? = initialFile.map { isDir($0) ? $0 : $0.deletingLastPathComponent() }
@@ -792,6 +792,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         menu.addItem(NSMenuItem(title: "Clear Menu", action: #selector(clearRecents), keyEquivalent: ""))
     }
 
+    @objc func openDocument(_ sender: Any?) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.beginSheetModal(for: window) { response in
+            guard response == .OK, let url = panel.url else { return }
+            self.navigate(to: resolveTarget(url.standardizedFileURL))
+        }
+    }
+
     @objc func revealInFinder() {
         guard let cur = currentFile else { return }
         NSWorkspace.shared.activateFileViewerSelecting([cur])
@@ -928,8 +939,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             watchTree()
         } else {
             sidebarScroll.isHidden = true
-            treeWatcher?.cancel()
-            treeWatcher = nil
+            stopTreeWatch()
         }
     }
 
@@ -961,24 +971,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         suppressSelection = false
     }
 
-    // Refresh the tree when anything inside the root folder changes (kqueue on the
-    // root dir catches direct children; deeper changes are caught on next toggle).
+    // Refresh the tree when anything under the root changes — FSEvents is
+    // recursive, so edits deep in subfolders are caught too.
     func watchTree() {
-        treeWatcher?.cancel()
-        treeWatcher = nil
+        stopTreeWatch()
         guard let root = rootNode, !sidebarScroll.isHidden else { return }
-        let fd = open(root.url.path, O_EVTONLY)
-        guard fd >= 0 else { return }
-        let src = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fd, eventMask: [.write], queue: .main)
-        src.setEventHandler { [weak self] in
-            guard let self else { return }
-            NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(self.reloadTree), object: nil)
-            self.perform(#selector(self.reloadTree), with: nil, afterDelay: 0.3)
+        var context = FSEventStreamContext()
+        context.info = Unmanaged.passUnretained(self).toOpaque()
+        let callback: FSEventStreamCallback = { _, info, _, _, _, _ in
+            guard let info else { return }
+            let me = Unmanaged<AppDelegate>.fromOpaque(info).takeUnretainedValue()
+            NSObject.cancelPreviousPerformRequests(
+                withTarget: me, selector: #selector(AppDelegate.reloadTree), object: nil)
+            me.perform(#selector(AppDelegate.reloadTree), with: nil, afterDelay: 0.3)
         }
-        src.setCancelHandler { close(fd) }
-        src.resume()
-        treeWatcher = src
+        guard let stream = FSEventStreamCreate(
+            nil, callback, &context, [root.url.path] as CFArray,
+            FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.3,
+            FSEventStreamCreateFlags(kFSEventStreamCreateFlagNone)) else { return }
+        FSEventStreamSetDispatchQueue(stream, .main)
+        FSEventStreamStart(stream)
+        fsStream = stream
+    }
+
+    func stopTreeWatch() {
+        if let stream = fsStream {
+            FSEventStreamStop(stream)
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+            fsStream = nil
+        }
     }
 
     @objc func reloadTree() {
@@ -1536,6 +1558,7 @@ appMenuItem.submenu = appMenu
 
 let fileMenuItem = NSMenuItem(); mainMenu.addItem(fileMenuItem)
 let fileMenu = NSMenu(title: "File")
+fileMenu.addItem(NSMenuItem(title: "Open…", action: #selector(AppDelegate.openDocument(_:)), keyEquivalent: "o"))
 let recentsItem = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "")
 recentsItem.submenu = recentsMenu
 fileMenu.addItem(recentsItem)
