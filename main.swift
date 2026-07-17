@@ -783,6 +783,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     func loadPage() {
         pageLoaded = false
+        // LaunchServices/stdin launches start with no tree root — adopt the
+        // first real document's folder so Cmd+B works there too.
+        if rootNode == nil, currentFile != nil {
+            rootNode = FileNode(url: currentBaseDir)
+            if UserDefaults.standard.bool(forKey: "sidebar") {
+                outlineView.reloadData()
+                if let root = rootNode { outlineView.expandItem(root) }
+                sidebarScroll.isHidden = false
+                if sidebarScroll.frame.width < 20 { splitView.setPosition(220, ofDividerAt: 0) }
+                watchTree()
+            }
+        }
         if let cur = currentFile {
             if !visited.contains(cur) { visited.append(cur) }
             noteRecent(cur)
